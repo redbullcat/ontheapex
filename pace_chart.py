@@ -26,6 +26,21 @@ def show_pace_chart(df, team_colors):
         key="pace_chart_car_filter"
     )
 
+    # ----------------------------
+    # Lap range filter (NEW)
+    # ----------------------------
+    min_lap = int(filtered_df["LAP_NUMBER"].min())
+    max_lap = int(filtered_df["LAP_NUMBER"].max())
+
+    lap_range = st.slider(
+        "Select Lap Range:",
+        min_value=min_lap,
+        max_value=max_lap,
+        value=(min_lap, max_lap),
+        step=1,
+        key="pace_chart_lap_filter"
+    )
+
     top_percent = st.slider(
         "Select Top Lap Percentage:",
         0,
@@ -45,6 +60,11 @@ def show_pace_chart(df, team_colors):
     # ----------------------------
     df = df[df["CLASS"].isin(selected_classes)]
     df = df[df["NUMBER"].isin(selected_cars)]
+    df = df[df["LAP_NUMBER"].between(lap_range[0], lap_range[1])]
+
+    if df.empty:
+        st.warning("No data available for the selected lap range.")
+        return
 
     # ----------------------------
     # Lap time conversion
@@ -100,12 +120,14 @@ def show_pace_chart(df, team_colors):
         x="LAP_TIME_SECONDS",
         color="TEAM",
         orientation="h",
-        color_discrete_map={team: col for team, col in zip(avg_df["TEAM"], avg_df["color"])},
+        color_discrete_map={
+            team: col for team, col in zip(avg_df["TEAM"], avg_df["color"])
+        },
     )
 
     fig.update_yaxes(
-        type='category',
-        categoryorder='array',
+        type="category",
+        categoryorder="array",
         categoryarray=avg_df["Label"]
     )
 
