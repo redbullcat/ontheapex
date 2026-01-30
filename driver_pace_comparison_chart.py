@@ -2,40 +2,17 @@ import plotly.graph_objects as go
 import streamlit as st
 import pandas as pd
 
+from race_preprocessing import preprocess_driver_laps
+
 
 # ------------------------------------------------------------
-# Cached preprocessing helpers
+# Cached aggregation helpers (unchanged)
 # ------------------------------------------------------------
-
-@st.cache_data(show_spinner=False)
-def preprocess_driver_laps(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert lap times to seconds and return a clean per-lap table.
-    Cached once per input df.
-    """
-
-    def lap_to_seconds(x):
-        try:
-            mins, secs = x.split(":")
-            return int(mins) * 60 + float(secs)
-        except Exception:
-            return None
-
-    work_df = df.copy()
-
-    work_df["LAP_TIME_SECONDS"] = work_df["LAP_TIME"].apply(lap_to_seconds)
-    work_df = work_df.dropna(
-        subset=["LAP_TIME_SECONDS", "DRIVER_NAME", "CLASS"]
-    )
-
-    return work_df
-
 
 @st.cache_data(show_spinner=False)
 def get_sorted_driver_laps(pre_df: pd.DataFrame, driver: str) -> pd.DataFrame:
     """
     Cached sorted lap table for a single driver.
-    Avoids repeated filtering + sorting.
     """
     return (
         pre_df[pre_df["DRIVER_NAME"] == driver]
@@ -120,7 +97,7 @@ def show_driver_pace_comparison(df, team_colors):
         return
 
     # --------------------------------------------------------
-    # Preprocessing (cached)
+    # Shared preprocessing cache (NEW)
     # --------------------------------------------------------
 
     pre_df = preprocess_driver_laps(df)
@@ -163,7 +140,7 @@ def show_driver_pace_comparison(df, team_colors):
     ]
 
     # --------------------------------------------------------
-    # Rendering only (no heavy logic)
+    # Rendering only
     # --------------------------------------------------------
 
     fig = go.Figure()
