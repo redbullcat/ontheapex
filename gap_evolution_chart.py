@@ -62,27 +62,25 @@ def time_to_seconds(time_str):
 
 
 # =========================
-# Main chart function
+# Shared filtering UI and data preprocessing
 # =========================
 
-def show_gap_evolution_chart(df, team_colors, race_start_date):
-    st.header("📉 Gap Evolution Chart")
-
+def get_filtered_race_data(df, race_start_date):
     required_cols = {'CLASS', 'NUMBER', 'LAP_TIME', 'LAP_NUMBER', 'TEAM', 'ELAPSED', 'HOUR'}
     if not required_cols.issubset(df.columns):
         st.warning(f"Required columns missing: {required_cols - set(df.columns)}")
-        return
+        return None, None, None, None
 
     df = df.copy()
 
     # Parse HOUR into absolute datetime per car with rollover
     df['HOUR_DT'] = parse_hour_with_date_and_rollover(df, race_start_date)
 
-    # Parse ELAPSED into timedelta for sanity (optional)
-    df['ELAPSED_TD'] = pd.to_timedelta(df['ELAPSED'], errors='coerce')
-
     # Convert LAP_TIME to seconds
     df['LAP_TIME_SEC'] = df['LAP_TIME'].apply(time_to_seconds)
+
+    # Parse ELAPSED into timedelta (optional, for consistency checks)
+    df['ELAPSED_TD'] = pd.to_timedelta(df['ELAPSED'], errors='coerce')
 
     # Select race class
     selected_class = st.selectbox("Select class:", sorted(df['CLASS'].dropna().unique()))
@@ -98,7 +96,7 @@ def show_gap_evolution_chart(df, team_colors, race_start_date):
 
     if not selected_cars:
         st.info("Please select at least one car to display.")
-        return
+        return None, None, None, None
 
     selected_df = class_df[class_df['NUMBER'].isin(selected_cars)].copy()
 
@@ -116,31 +114,42 @@ def show_gap_evolution_chart(df, team_colors, race_start_date):
         value=(min_lap, max_lap)
     )
 
-    selected_df = selected_df[
+    filtered_df = selected_df[
         (selected_df['LAP_NUMBER'] >= lap_range[0]) &
         (selected_df['LAP_NUMBER'] <= lap_range[1])
     ]
 
-    if selected_df.empty:
+    if filtered_df.empty:
         st.info("No data available for selected filters.")
-        return
+        return None, None, None, None
 
+    return filtered_df, selected_class, selected_cars, lap_range
+
+
+# =========================
+# Existing Gap Evolution Chart
+# =========================
+
+def show_gap_evolution_chart(filtered_df, team_colors, selected_class, selected_cars):
+    st.header("📉 Gap Evolution Chart")
+
+    race_start_date = filtered_df['HOUR_DT'].min().date()
     race_start_dt = datetime.combine(race_start_date, datetime.min.time())
 
     # Compute cumulative time in seconds from race start datetime
-    selected_df['CUM_TIME_SEC'] = (selected_df['HOUR_DT'] - race_start_dt).dt.total_seconds()
+    filtered_df['CUM_TIME_SEC'] = (filtered_df['HOUR_DT'] - race_start_dt).dt.total_seconds()
 
     # Determine fastest finisher by minimum final cumulative time
-    final_times = selected_df.groupby('NUMBER')['CUM_TIME_SEC'].max()
+    final_times = filtered_df.groupby('NUMBER')['CUM_TIME_SEC'].max()
     fastest_car = final_times.idxmin()
 
     # Reference cumulative times of fastest car by lap
-    ref_df = selected_df[selected_df['NUMBER'] == fastest_car][['LAP_NUMBER', 'CUM_TIME_SEC']].rename(
+    ref_df = filtered_df[filtered_df['NUMBER'] == fastest_car][['LAP_NUMBER', 'CUM_TIME_SEC']].rename(
         columns={'CUM_TIME_SEC': 'FASTEST_CUM_TIME'}
     )
 
     # Merge to calculate gap to fastest per lap (seconds)
-    merged = selected_df.merge(ref_df, on='LAP_NUMBER', how='left')
+    merged = filtered_df.merge(ref_df, on='LAP_NUMBER', how='left')
     merged['GAP_TO_FASTEST'] = merged['CUM_TIME_SEC'] - merged['FASTEST_CUM_TIME']
 
     # Build Plotly figure
@@ -177,95 +186,24 @@ def show_gap_evolution_chart(df, team_colors, race_start_date):
 
     st.plotly_chart(fig, use_container_width=True)
 
-import functools
 
-# ---------------------------
-# Cache filtered & preprocessed data for reuse
-# ---------------------------
-@st.cache_data(show_spinner=False)
-def prepare_gap_and_cumtime_data(df, race_start_date, selected_class, selected_cars, lap_range):
-    df = df.copy()
-    df['HOUR_DT'] = parse_hour_with_date_and_rollover(df, race_start_date)
-    df['LAP_TIME_SEC'] = df['LAP_TIME'].apply(time_to_seconds)
-    df['LAP_NUMBER'] = pd.to_numeric(df['LAP_NUMBER'], errors='coerce')
-    df = df.dropna(subset=['HOUR_DT', 'LAP_NUMBER'])
-    df['LAP_NUMBER'] = df['LAP_NUMBER'].astype(int)
+# =========================
+# New Cumulative Time Chart
+# =========================
 
-    class_df = df[df['CLASS'] == selected_class]
-    selected_df = class_df[class_df['NUMBER'].isin(selected_cars)]
-    selected_df = selected_df[
-        (selected_df['LAP_NUMBER'] >= lap_range[0]) &
-        (selected_df['LAP_NUMBER'] <= lap_range[1])
-    ].copy()
+def show_cumulative_time_chart(filtered_df, team_colors, selected_class, selected_cars):
+    st.header("⏱️ Cumulative Time Chart")
 
-    if selected_df.empty:
-        return None, None, None  # No data to plot
-
+    race_start_date = filtered_df['HOUR_DT'].min().date()
     race_start_dt = datetime.combine(race_start_date, datetime.min.time())
-    selected_df['CUM_TIME_SEC'] = (selected_df['HOUR_DT'] - race_start_dt).dt.total_seconds()
 
-    # Gap to fastest car
-    final_times = selected_df.groupby('NUMBER')['CUM_TIME_SEC'].max()
-    fastest_car = final_times.idxmin()
-    ref_df = selected_df[selected_df['NUMBER'] == fastest_car][['LAP_NUMBER', 'CUM_TIME_SEC']].rename(
-        columns={'CUM_TIME_SEC': 'FASTEST_CUM_TIME'}
-    )
-    merged = selected_df.merge(ref_df, on='LAP_NUMBER', how='left')
-    merged['GAP_TO_FASTEST'] = merged['CUM_TIME_SEC'] - merged['FASTEST_CUM_TIME']
+    # Compute cumulative time in seconds from race start datetime
+    filtered_df['CUM_TIME_SEC'] = (filtered_df['HOUR_DT'] - race_start_dt).dt.total_seconds()
 
-    return merged, fastest_car, selected_df
-
-# ---------------------------
-# New cumulative time chart function
-# ---------------------------
-def show_cumulative_time_chart(df, team_colors, race_start_date):
-    st.header("⏱️ Cumulative Time Evolution Chart")
-
-    required_cols = {'CLASS', 'NUMBER', 'LAP_TIME', 'LAP_NUMBER', 'TEAM', 'ELAPSED', 'HOUR'}
-    if not required_cols.issubset(df.columns):
-        st.warning(f"Required columns missing: {required_cols - set(df.columns)}")
-        return
-
-    # Select class
-    selected_class = st.selectbox("Select class for cumulative chart:", sorted(df['CLASS'].dropna().unique()), key="cum_class")
-
-    class_df = df[df['CLASS'] == selected_class].copy()
-    car_numbers = sorted(class_df['NUMBER'].dropna().unique())
-
-    # Select cars
-    selected_cars = st.multiselect(
-        "Select cars to compare (cumulative chart):",
-        options=car_numbers,
-        default=car_numbers[:3] if len(car_numbers) >= 3 else car_numbers,
-        key="cum_cars"
-    )
-
-    if not selected_cars:
-        st.info("Please select at least one car to display.")
-        return
-
-    # Lap range slider
-    min_lap = int(class_df['LAP_NUMBER'].min())
-    max_lap = int(class_df['LAP_NUMBER'].max())
-    lap_range = st.slider(
-        "Select lap range to display (cumulative chart)",
-        min_value=min_lap,
-        max_value=max_lap,
-        value=(min_lap, max_lap),
-        key="cum_lap_range"
-    )
-
-    # Prepare data (cached)
-    merged, fastest_car, selected_df = prepare_gap_and_cumtime_data(df, race_start_date, selected_class, selected_cars, lap_range)
-    if merged is None:
-        st.info("No data available for selected filters.")
-        return
-
-    # Plot cumulative times
     fig = go.Figure()
 
     for car in selected_cars:
-        car_data = selected_df[selected_df['NUMBER'] == car]
+        car_data = filtered_df[filtered_df['NUMBER'] == car]
         if car_data.empty:
             continue
 
@@ -282,7 +220,7 @@ def show_cumulative_time_chart(df, team_colors, race_start_date):
         ))
 
     fig.update_layout(
-        title=f"Cumulative Time Evolution – {selected_class}",
+        title=f"Cumulative Time – {selected_class}",
         xaxis_title="Lap Number",
         yaxis_title="Cumulative Time (seconds)",
         plot_bgcolor="#2b2b2b",
@@ -294,4 +232,3 @@ def show_cumulative_time_chart(df, team_colors, race_start_date):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-
