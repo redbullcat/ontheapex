@@ -241,7 +241,7 @@ if page == "Overview":
         st.error("Race start date not found or invalid.")
         st.stop()
 
-    overview_tab, gap_tab, pace_tab, tyre_tab = st.tabs(["Overview", 'Gap evolution', 'Race pace', "Tyre analysis"])
+    overview_tab, gap_tab, pace_tab, pits_tab = st.tabs(["Overview", 'Gap evolution', 'Race pace', "Pit stops"])
 
     with overview_tab:
         show_race_stats(df, race_start_date)
@@ -261,7 +261,7 @@ if page == "Overview":
             show_cumulative_time_chart(filtered_df, team_colors, selected_class, selected_cars)
             show_stint_pace_chart(df, team_colors)
 
-    with tyre_tab:
+    with pits_tab:
         show_tyre_analysis()
 
 elif page == "Team by team":
