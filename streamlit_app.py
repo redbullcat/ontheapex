@@ -11,7 +11,10 @@ from driver_pace_chart import show_driver_pace_chart
 from driver_pace_comparison_chart import show_driver_pace_comparison
 from team_driver_pace_comparison import show_team_driver_pace_comparison
 from results_table import show_results_table
-from gap_evolution_chart import show_gap_evolution_chart, show_cumulative_time_chart
+from gap_evolution_chart import ( 
+    show_gap_evolution_chart, 
+    show_cumulative_time_chart, 
+    get_filtered_race_data )
 from stint_pace_chart import show_stint_pace_chart
 from team_season_comparison import show_team_season_comparison
 from track_analysis import show_track_analysis
@@ -247,9 +250,12 @@ if page == "Overview":
         show_lap_position_chart(df, team_colors)
         show_driver_pace_comparison(df, team_colors)
         show_results_table(df, team_colors)
-        show_gap_evolution_chart(df, team_colors, race_start_date)
-        show_cumulative_time_chart(df, team_colors, race_start_date)
-        show_stint_pace_chart(df, team_colors)
+        filtered_df, selected_class, selected_cars, lap_range = get_filtered_race_data(df, race_start_date)
+
+        if filtered_df is not None:
+            show_gap_evolution_chart(filtered_df, team_colors, selected_class, selected_cars)
+            show_cumulative_time_chart(filtered_df, team_colors, selected_class, selected_cars)
+            show_stint_pace_chart(df, team_colors)
 
     with tyre_tab:
         show_tyre_analysis()
