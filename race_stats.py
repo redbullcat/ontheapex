@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
+from race_preprocessing import preprocess_race
 
 # =========================
 # Helper: ELAPSED parsing
@@ -207,26 +208,64 @@ def compute_driver_lead_stats_by_class(class_leader_df):
 
 
 # =========================
+# Caching and preprocessing helpers
+# =========================
+
+@st.cache_data(show_spinner="Preprocessing race data for stats…")
+def preprocess_for_stats(df, race_start_date):
+    pre_df = preprocess_race(df)
+
+    pre_df["ELAPSED"] = parse_elapsed_to_timedelta(pre_df["ELAPSED"])
+    pre_df["HOUR_DT"] = parse_hour_with_date_and_rollover(pre_df, race_start_date)
+
+    pre_df = pre_df.dropna(subset=["ELAPSED", "HOUR_DT"])
+
+    return pre_df
+
+
+@st.cache_data(show_spinner="Computing overall leader by lap…")
+def cached_overall_leader(pre_df, race_start_date):
+    return get_overall_leader_by_lap(pre_df, race_start_date)
+
+
+@st.cache_data(show_spinner="Computing class leader by lap…")
+def cached_class_leader(pre_df, race_start_date):
+    return get_class_leader_by_lap(pre_df, race_start_date)
+
+
+@st.cache_data(show_spinner="Computing lead stats…")
+def cached_lead_stats(overall_leader_df, class_leader_df):
+    return {
+        "lead_changes": compute_lead_changes(overall_leader_df),
+        "lead_changes_by_class": compute_lead_changes_by_class(class_leader_df),
+        "flag_lap_counts": compute_flag_lap_counts(overall_leader_df),
+        "longest_lead_stint": compute_longest_lead_stint(overall_leader_df),
+        "car_stats": compute_car_lead_stats_by_class(class_leader_df),
+        "driver_stats": compute_driver_lead_stats_by_class(class_leader_df),
+    }
+
+
+# =========================
 # Streamlit renderer
 # =========================
 
 def show_race_stats(df, race_start_date):
     st.subheader("Race statistics")
 
-    df = df.copy()
-    df["ELAPSED"] = parse_elapsed_to_timedelta(df["ELAPSED"])
-    df["HOUR_DT"] = parse_hour_with_date_and_rollover(df, race_start_date)
+    pre_df = preprocess_for_stats(df, race_start_date)
 
-    overall_leader_df = get_overall_leader_by_lap(df, race_start_date)
-    class_leader_df = get_class_leader_by_lap(df, race_start_date)
+    overall_leader_df = cached_overall_leader(pre_df, race_start_date)
+    class_leader_df = cached_class_leader(pre_df, race_start_date)
+
+    stats = cached_lead_stats(overall_leader_df, class_leader_df)
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("Overall lead changes", compute_lead_changes(overall_leader_df))
+        st.metric("Overall lead changes", stats["lead_changes"])
 
         st.markdown("**Lead changes by class**")
-        for cls, changes in compute_lead_changes_by_class(class_leader_df).items():
+        for cls, changes in stats["lead_changes_by_class"].items():
             st.write(f"- **{cls}**: {changes}")
 
     with col2:
@@ -236,10 +275,10 @@ def show_race_stats(df, race_start_date):
         st.metric("Total race laps", overall_leader_df["LAP_NUMBER"].nunique())
 
     st.markdown("**Laps by flag condition**")
-    for flag, count in compute_flag_lap_counts(overall_leader_df).items():
+    for flag, count in stats["flag_lap_counts"].items():
         st.write(f"- **{flag}**: {count} laps")
 
-    car, laps = compute_longest_lead_stint(overall_leader_df)
+    car, laps = stats["longest_lead_stint"]
     st.markdown(f"**Longest uninterrupted overall lead:** Car **{car}** – **{laps} laps**")
 
     st.markdown("## Laps led by class")
@@ -247,13 +286,10 @@ def show_race_stats(df, race_start_date):
     classes = sorted(class_leader_df["CLASS"].dropna().unique())
     tabs = st.tabs(classes)
 
-    car_stats = compute_car_lead_stats_by_class(class_leader_df)
-    driver_stats = compute_driver_lead_stats_by_class(class_leader_df)
-
     for tab, cls in zip(tabs, classes):
         with tab:
             st.markdown("### Cars")
-            cs = car_stats[car_stats["CLASS"] == cls]
+            cs = stats["car_stats"][stats["car_stats"]["CLASS"] == cls]
 
             st.dataframe(
                 cs.rename(columns={
@@ -270,7 +306,7 @@ def show_race_stats(df, race_start_date):
             )
 
             st.markdown("### Drivers")
-            ds = driver_stats[driver_stats["CLASS"] == cls]
+            ds = stats["driver_stats"][stats["driver_stats"]["CLASS"] == cls]
 
             st.dataframe(
                 ds.rename(columns={
