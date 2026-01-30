@@ -241,15 +241,19 @@ if page == "Overview":
         st.error("Race start date not found or invalid.")
         st.stop()
 
-    overview_tab, tyre_tab = st.tabs(["Overview", "Tyre analysis"])
+    overview_tab, gap_tab, pace_tab, tyre_tab = st.tabs(["Overview", 'Gap evolution', 'Race pace', "Tyre analysis"])
 
     with overview_tab:
         show_race_stats(df, race_start_date)
+        show_results_table(df, team_colors)
+        show_lap_position_chart(df, team_colors)
+
+    with pace_tab:
         show_pace_chart(df_pre, team_colors)
         show_driver_pace_chart(df, team_colors)
-        show_lap_position_chart(df, team_colors)
         show_driver_pace_comparison(df, team_colors)
-        show_results_table(df, team_colors)
+
+    with gap_tab:
         filtered_df, selected_class, selected_cars, lap_range = get_filtered_race_data(df, race_start_date)
 
         if filtered_df is not None:
