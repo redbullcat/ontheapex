@@ -2,18 +2,77 @@ import plotly.express as px
 import pandas as pd
 import streamlit as st
 
+
+# ------------------------------------------------------------------
+# Cached helpers (PURE functions only)
+# ------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def convert_lap_times(df):
+    def lap_to_seconds(x):
+        try:
+            mins, secs = x.split(":")
+            return int(mins) * 60 + float(secs)
+        except Exception:
+            return None
+
+    df = df.copy()
+    df["LAP_TIME_SECONDS"] = df["LAP_TIME"].apply(lap_to_seconds)
+    return df.dropna(subset=["LAP_TIME_SECONDS"])
+
+
+@st.cache_data(show_spinner=False)
+def filter_top_percent_laps(df, percent):
+    if percent >= 100:
+        return df
+
+    filtered_dfs = []
+    for car_number, group in df.groupby("NUMBER"):
+        group_sorted = group.sort_values("LAP_TIME_SECONDS")
+        n_laps = len(group_sorted)
+        n_keep = max(1, int(n_laps * percent / 100))
+        filtered_dfs.append(group_sorted.head(n_keep))
+
+    return pd.concat(filtered_dfs, ignore_index=True)
+
+
+@st.cache_data(show_spinner=False)
+def compute_avg_pace(df):
+    return (
+        df.groupby(["NUMBER", "TEAM", "CLASS"], as_index=False)["LAP_TIME_SECONDS"]
+        .mean()
+        .sort_values("LAP_TIME_SECONDS", ascending=True)
+    )
+
+
+@st.cache_data(show_spinner=False)
+def assign_team_colors(avg_df, team_colors):
+    def get_team_color(team):
+        for key, color in team_colors.items():
+            if key.lower() in team.lower():
+                return color
+        return "#888888"
+
+    avg_df = avg_df.copy()
+    avg_df["color"] = avg_df["TEAM"].apply(get_team_color)
+    avg_df["Label"] = avg_df["NUMBER"] + " — " + avg_df["TEAM"]
+    return avg_df
+
+
+# ------------------------------------------------------------------
+# Main chart function
+# ------------------------------------------------------------------
 def show_pace_chart(df, team_colors):
     st.subheader("Average Race Pace by Car")
 
-    # ----------------------------
-    # Independent filters
-    # ----------------------------
+    # --------------------------------------------------------------
+    # Filters (UI only – NOT cached)
+    # --------------------------------------------------------------
     classes = df["CLASS"].dropna().unique().tolist()
     selected_classes = st.multiselect(
         "Select Class(es):",
         options=classes,
         default=classes,
-        key="pace_chart_class_filter"
+        key="pace_chart_class_filter",
     )
 
     filtered_df = df[df["CLASS"].isin(selected_classes)]
@@ -23,12 +82,9 @@ def show_pace_chart(df, team_colors):
         "Select Car(s):",
         options=available_cars,
         default=available_cars,
-        key="pace_chart_car_filter"
+        key="pace_chart_car_filter",
     )
 
-    # ----------------------------
-    # Lap range filter (NEW)
-    # ----------------------------
     min_lap = int(filtered_df["LAP_NUMBER"].min())
     max_lap = int(filtered_df["LAP_NUMBER"].max())
 
@@ -38,7 +94,7 @@ def show_pace_chart(df, team_colors):
         max_value=max_lap,
         value=(min_lap, max_lap),
         step=1,
-        key="pace_chart_lap_filter"
+        key="pace_chart_lap_filter",
     )
 
     top_percent = st.slider(
@@ -48,72 +104,37 @@ def show_pace_chart(df, team_colors):
         100,
         step=20,
         key="pace_chart_top_lap_filter",
-        help="Use 0% to hide all data."
+        help="Use 0% to hide all data.",
     )
 
     if top_percent == 0:
         st.warning("You selected 0%. You won't see any data.")
         return
 
-    # ----------------------------
-    # Apply filters
-    # ----------------------------
-    df = df[df["CLASS"].isin(selected_classes)]
-    df = df[df["NUMBER"].isin(selected_cars)]
-    df = df[df["LAP_NUMBER"].between(lap_range[0], lap_range[1])]
+    # --------------------------------------------------------------
+    # Apply filters (cheap operations)
+    # --------------------------------------------------------------
+    df = df[
+        (df["CLASS"].isin(selected_classes))
+        & (df["NUMBER"].isin(selected_cars))
+        & (df["LAP_NUMBER"].between(lap_range[0], lap_range[1]))
+    ]
 
     if df.empty:
-        st.warning("No data available for the selected lap range.")
+        st.warning("No data available for the selected filters.")
         return
 
-    # ----------------------------
-    # Lap time conversion
-    # ----------------------------
-    def lap_to_seconds(x):
-        try:
-            mins, secs = x.split(":")
-            return int(mins) * 60 + float(secs)
-        except:
-            return None
+    # --------------------------------------------------------------
+    # Heavy processing (CACHED)
+    # --------------------------------------------------------------
+    df = convert_lap_times(df)
+    df = filter_top_percent_laps(df, top_percent)
+    avg_df = compute_avg_pace(df)
+    avg_df = assign_team_colors(avg_df, team_colors)
 
-    df["LAP_TIME_SECONDS"] = df["LAP_TIME"].apply(lap_to_seconds)
-    df = df.dropna(subset=["LAP_TIME_SECONDS"])
-
-    # ----------------------------
-    # Keep top X% laps
-    # ----------------------------
-    def filter_top_percent_laps(df, percent):
-        filtered_dfs = []
-        for car_number, group in df.groupby("NUMBER"):
-            group_sorted = group.sort_values("LAP_TIME_SECONDS")
-            n_laps = len(group_sorted)
-            n_keep = max(1, int(n_laps * percent / 100))
-            filtered_dfs.append(group_sorted.head(n_keep))
-        return pd.concat(filtered_dfs)
-
-    filtered_df = filter_top_percent_laps(df, top_percent)
-
-    avg_df = (
-        filtered_df.groupby(["NUMBER", "TEAM", "CLASS"], as_index=False)["LAP_TIME_SECONDS"]
-        .mean()
-        .sort_values("LAP_TIME_SECONDS", ascending=True)
-    )
-
-    # ----------------------------
-    # Colour mapping
-    # ----------------------------
-    def get_team_color(team):
-        for key, color in team_colors.items():
-            if key.lower() in team.lower():
-                return color
-        return "#888888"
-
-    avg_df["color"] = avg_df["TEAM"].apply(get_team_color)
-    avg_df["Label"] = avg_df["NUMBER"] + " — " + avg_df["TEAM"]
-
-    # ----------------------------
-    # Plotly figure
-    # ----------------------------
+    # --------------------------------------------------------------
+    # Plot
+    # --------------------------------------------------------------
     fig = px.bar(
         avg_df,
         y="Label",
@@ -128,11 +149,11 @@ def show_pace_chart(df, team_colors):
     fig.update_yaxes(
         type="category",
         categoryorder="array",
-        categoryarray=avg_df["Label"]
+        categoryarray=avg_df["Label"],
     )
 
-    x_min = avg_df["LAP_TIME_SECONDS"].min() - 0.5 if not avg_df.empty else 0
-    x_max = avg_df["LAP_TIME_SECONDS"].max() + 0.5 if not avg_df.empty else 1
+    x_min = avg_df["LAP_TIME_SECONDS"].min() - 0.5
+    x_max = avg_df["LAP_TIME_SECONDS"].max() + 0.5
     fig.update_xaxes(range=[x_min, x_max])
 
     fig.update_layout(
