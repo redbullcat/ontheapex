@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
+from race_preprocessing import preprocess_race
 from pace_chart import show_pace_chart
 from lap_position_chart import show_lap_position_chart
 from driver_pace_chart import show_driver_pace_chart
@@ -192,6 +193,7 @@ if page != "Practice / Test analysis":
     )
 
     df = load_race_data(file_path, selected_year, selected_series)
+    df_pre = preprocess_race(df)  # ← NEW (cached, shared)
     race_start_date = parse_race_start_date(selected_event["race_file"])
 
 # ------------------------------------------------------------------
@@ -240,7 +242,7 @@ if page == "Overview":
 
     with overview_tab:
         show_race_stats(df, race_start_date)
-        show_pace_chart(df, team_colors)
+        show_pace_chart(df_pre, team_colors)
         show_driver_pace_chart(df, team_colors)
         show_lap_position_chart(df, team_colors)
         show_driver_pace_comparison(df, team_colors)
