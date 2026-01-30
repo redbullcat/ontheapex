@@ -248,6 +248,7 @@ if page == "Overview":
         show_driver_pace_comparison(df, team_colors)
         show_results_table(df, team_colors)
         show_gap_evolution_chart(df, team_colors, race_start_date)
+        show_cumulative_time_chart(df, team_colors, race_start_date)
         show_stint_pace_chart(df, team_colors)
 
     with tyre_tab:
