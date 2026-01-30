@@ -1,15 +1,66 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from race_preprocessing import preprocess_race  # <-- import shared preprocessing
+
+@st.cache_data(show_spinner=False)
+def compute_stint_aggregates(filtered_df, team_colors, cls):
+    stint_data = []
+
+    for car, car_df in filtered_df.groupby("NUMBER"):
+        car_df = car_df.sort_values("LAP_NUMBER").reset_index(drop=True)
+
+        pit_indices = car_df.index[car_df["CROSSING_FINISH_LINE_IN_PIT"] == "B"].tolist()
+
+        # Define stint start and end indices; outlaps removed by skipping lap after pitstop
+        stint_starts = [0] + [p + 2 for p in pit_indices if (p + 2) < len(car_df)]
+        stint_ends = pit_indices + [len(car_df)]
+
+        for stint_num, (s, e) in enumerate(zip(stint_starts, stint_ends), start=1):
+            stint_df = car_df.iloc[s:e].copy()
+            if len(stint_df) < 3:
+                continue  # skip short stints
+
+            # Use preprocessed LAP_TIME_SECONDS column
+            stint_df = stint_df.dropna(subset=["LAP_TIME_SECONDS"])
+
+            if stint_df.empty:
+                continue
+
+            top_count = max(1, int(0.2 * len(stint_df)))
+            top_laps = stint_df.nsmallest(top_count, "LAP_TIME_SECONDS")
+
+            stint_avg = top_laps["LAP_TIME_SECONDS"].mean()
+            stint_length = len(stint_df)
+            stint_start_time = stint_df["ELAPSED"].iloc[0]
+
+            team_name = stint_df["TEAM"].iloc[0]
+            color = "#888888"  # fallback color
+            for key, val in team_colors.items():
+                if key.lower() in team_name.lower():
+                    color = val
+                    break
+
+            stint_data.append({
+                "NUMBER": car,
+                "TEAM": team_name,
+                "CLASS": cls,
+                "Stint Avg (Top 20%)": stint_avg,
+                "Stint Length (laps)": stint_length,
+                "Stint Start Time": stint_start_time,
+                "Stint Number": stint_num,
+                "Color": color
+            })
+
+    stint_df_final = pd.DataFrame(stint_data)
+
+    # Sort so stint numbers appear in ascending order on x axis
+    stint_df_final = stint_df_final.sort_values(["Stint Number", "NUMBER"])
+
+    return stint_df_final
+
 
 def show_stint_pace_chart(df, team_colors):
-    def lap_to_seconds(x):
-        try:
-            mins, secs = x.split(":")
-            return int(mins) * 60 + float(secs)
-        except:
-            return None
-
     if df.empty:
         st.warning("No data available.")
         return
@@ -39,61 +90,15 @@ def show_stint_pace_chart(df, team_colors):
 
             filtered_df = class_df[class_df["NUMBER"].isin(selected_cars)].copy()
 
-            stint_data = []
+            # Preprocess lap times once
+            preprocessed_df = preprocess_race(filtered_df)
 
-            for car, car_df in filtered_df.groupby("NUMBER"):
-                car_df = car_df.sort_values("LAP_NUMBER").reset_index(drop=True)
+            # Compute cached stint aggregates
+            stint_df_final = compute_stint_aggregates(preprocessed_df, team_colors, cls)
 
-                pit_indices = car_df.index[car_df["CROSSING_FINISH_LINE_IN_PIT"] == "B"].tolist()
-
-                # Define stint start and end indices; outlaps removed by skipping lap after pitstop
-                stint_starts = [0] + [p + 2 for p in pit_indices if (p + 2) < len(car_df)]
-                stint_ends = pit_indices + [len(car_df)]
-
-                for stint_num, (s, e) in enumerate(zip(stint_starts, stint_ends), start=1):
-                    stint_df = car_df.iloc[s:e].copy()
-                    if len(stint_df) < 3:
-                        continue  # skip short stints
-
-                    stint_df["LAP_TIME_SEC"] = stint_df["LAP_TIME"].apply(lap_to_seconds)
-                    stint_df = stint_df.dropna(subset=["LAP_TIME_SEC"])
-
-                    if stint_df.empty:
-                        continue
-
-                    top_count = max(1, int(0.2 * len(stint_df)))
-                    top_laps = stint_df.nsmallest(top_count, "LAP_TIME_SEC")
-
-                    stint_avg = top_laps["LAP_TIME_SEC"].mean()
-                    stint_length = len(stint_df)
-                    stint_start_time = stint_df["ELAPSED"].iloc[0]
-
-                    team_name = stint_df["TEAM"].iloc[0]
-                    color = "#888888"  # fallback color
-                    for key, val in team_colors.items():
-                        if key.lower() in team_name.lower():
-                            color = val
-                            break
-
-                    stint_data.append({
-                        "NUMBER": car,
-                        "TEAM": team_name,
-                        "CLASS": cls,
-                        "Stint Avg (Top 20%)": stint_avg,
-                        "Stint Length (laps)": stint_length,
-                        "Stint Start Time": stint_start_time,
-                        "Stint Number": stint_num,
-                        "Color": color
-                    })
-
-            if not stint_data:
+            if stint_df_final.empty:
                 st.info("No stint data available for selected cars.")
                 continue
-
-            stint_df_final = pd.DataFrame(stint_data)
-
-            # Sort so stint numbers appear in ascending order on x axis
-            stint_df_final = stint_df_final.sort_values(["Stint Number", "NUMBER"])
 
             fig = px.bar(
                 stint_df_final,
