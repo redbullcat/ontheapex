@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import pandas as pd
 
-from race_preprocessing import preprocess_driver_laps
+from race_preprocessing import preprocess_race
 
 
 # ------------------------------------------------------------
@@ -97,10 +97,10 @@ def show_driver_pace_comparison(df, team_colors):
         return
 
     # --------------------------------------------------------
-    # Shared preprocessing cache (NEW)
+    # Shared preprocessing cache (fixed)
     # --------------------------------------------------------
 
-    pre_df = preprocess_driver_laps(df)
+    pre_df = preprocess_race(df)
 
     # --------------------------------------------------------
     # Aggregation (cached)
