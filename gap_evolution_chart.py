@@ -176,3 +176,122 @@ def show_gap_evolution_chart(df, team_colors, race_start_date):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+import functools
+
+# ---------------------------
+# Cache filtered & preprocessed data for reuse
+# ---------------------------
+@st.cache_data(show_spinner=False)
+def prepare_gap_and_cumtime_data(df, race_start_date, selected_class, selected_cars, lap_range):
+    df = df.copy()
+    df['HOUR_DT'] = parse_hour_with_date_and_rollover(df, race_start_date)
+    df['LAP_TIME_SEC'] = df['LAP_TIME'].apply(time_to_seconds)
+    df['LAP_NUMBER'] = pd.to_numeric(df['LAP_NUMBER'], errors='coerce')
+    df = df.dropna(subset=['HOUR_DT', 'LAP_NUMBER'])
+    df['LAP_NUMBER'] = df['LAP_NUMBER'].astype(int)
+
+    class_df = df[df['CLASS'] == selected_class]
+    selected_df = class_df[class_df['NUMBER'].isin(selected_cars)]
+    selected_df = selected_df[
+        (selected_df['LAP_NUMBER'] >= lap_range[0]) &
+        (selected_df['LAP_NUMBER'] <= lap_range[1])
+    ].copy()
+
+    if selected_df.empty:
+        return None, None, None  # No data to plot
+
+    race_start_dt = datetime.combine(race_start_date, datetime.min.time())
+    selected_df['CUM_TIME_SEC'] = (selected_df['HOUR_DT'] - race_start_dt).dt.total_seconds()
+
+    # Gap to fastest car
+    final_times = selected_df.groupby('NUMBER')['CUM_TIME_SEC'].max()
+    fastest_car = final_times.idxmin()
+    ref_df = selected_df[selected_df['NUMBER'] == fastest_car][['LAP_NUMBER', 'CUM_TIME_SEC']].rename(
+        columns={'CUM_TIME_SEC': 'FASTEST_CUM_TIME'}
+    )
+    merged = selected_df.merge(ref_df, on='LAP_NUMBER', how='left')
+    merged['GAP_TO_FASTEST'] = merged['CUM_TIME_SEC'] - merged['FASTEST_CUM_TIME']
+
+    return merged, fastest_car, selected_df
+
+# ---------------------------
+# New cumulative time chart function
+# ---------------------------
+def show_cumulative_time_chart(df, team_colors, race_start_date):
+    st.header("⏱️ Cumulative Time Evolution Chart")
+
+    required_cols = {'CLASS', 'NUMBER', 'LAP_TIME', 'LAP_NUMBER', 'TEAM', 'ELAPSED', 'HOUR'}
+    if not required_cols.issubset(df.columns):
+        st.warning(f"Required columns missing: {required_cols - set(df.columns)}")
+        return
+
+    # Select class
+    selected_class = st.selectbox("Select class for cumulative chart:", sorted(df['CLASS'].dropna().unique()), key="cum_class")
+
+    class_df = df[df['CLASS'] == selected_class].copy()
+    car_numbers = sorted(class_df['NUMBER'].dropna().unique())
+
+    # Select cars
+    selected_cars = st.multiselect(
+        "Select cars to compare (cumulative chart):",
+        options=car_numbers,
+        default=car_numbers[:3] if len(car_numbers) >= 3 else car_numbers,
+        key="cum_cars"
+    )
+
+    if not selected_cars:
+        st.info("Please select at least one car to display.")
+        return
+
+    # Lap range slider
+    min_lap = int(class_df['LAP_NUMBER'].min())
+    max_lap = int(class_df['LAP_NUMBER'].max())
+    lap_range = st.slider(
+        "Select lap range to display (cumulative chart)",
+        min_value=min_lap,
+        max_value=max_lap,
+        value=(min_lap, max_lap),
+        key="cum_lap_range"
+    )
+
+    # Prepare data (cached)
+    merged, fastest_car, selected_df = prepare_gap_and_cumtime_data(df, race_start_date, selected_class, selected_cars, lap_range)
+    if merged is None:
+        st.info("No data available for selected filters.")
+        return
+
+    # Plot cumulative times
+    fig = go.Figure()
+
+    for car in selected_cars:
+        car_data = selected_df[selected_df['NUMBER'] == car]
+        if car_data.empty:
+            continue
+
+        team_name = car_data['TEAM'].iloc[0] if 'TEAM' in car_data.columns else ''
+        color = team_colors.get(team_name, "#AAAAAA")
+
+        fig.add_trace(go.Scatter(
+            x=car_data['LAP_NUMBER'],
+            y=car_data['CUM_TIME_SEC'],
+            mode='lines+markers',
+            name=f"{car} – {team_name}",
+            line=dict(width=2, color=color),
+            marker=dict(size=4)
+        ))
+
+    fig.update_layout(
+        title=f"Cumulative Time Evolution – {selected_class}",
+        xaxis_title="Lap Number",
+        yaxis_title="Cumulative Time (seconds)",
+        plot_bgcolor="#2b2b2b",
+        paper_bgcolor="#2b2b2b",
+        font=dict(color="white"),
+        xaxis=dict(color='white', gridcolor="#444"),
+        yaxis=dict(color='white', gridcolor="#444"),
+        legend=dict(bgcolor='rgba(0,0,0,0)')
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
