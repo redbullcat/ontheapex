@@ -11,7 +11,7 @@ from driver_pace_chart import show_driver_pace_chart
 from driver_pace_comparison_chart import show_driver_pace_comparison
 from team_driver_pace_comparison import show_team_driver_pace_comparison
 from results_table import show_results_table
-from gap_evolution_chart import show_gap_evolution_chart
+from gap_evolution_chart import show_gap_evolution_chart, show_cumulative_time_chart
 from stint_pace_chart import show_stint_pace_chart
 from team_season_comparison import show_team_season_comparison
 from track_analysis import show_track_analysis
