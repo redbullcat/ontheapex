@@ -71,6 +71,8 @@ def show_lap_position_chart(df, team_colors):
 
     default_class = max(available_classes, key=class_max_lap)
 
+    st.subheader("Lap-by-Lap Position Chart")
+
     selected_classes = st.multiselect(
         "Select Class for Lap Position Chart",
         available_classes,
@@ -80,8 +82,6 @@ def show_lap_position_chart(df, team_colors):
     if not selected_classes:
         st.warning("No classes selected for lap position chart.")
         return
-
-    st.subheader("Lap-by-Lap Position Chart")
 
     for cls in selected_classes:
         with st.expander(f"Class: {cls}", expanded=True):
