@@ -1,30 +1,15 @@
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
-from race_preprocessing import preprocess_race
-
-# =========================
-# Helper: ELAPSED parsing
-# =========================
-
-def parse_elapsed_to_timedelta(series: pd.Series) -> pd.Series:
-    """
-    Parse ELAPSED values into pandas Timedelta.
-    """
-    return pd.to_timedelta(series, errors="coerce")
-
 
 # =========================
 # Helper: lap ranges
 # =========================
-
 def laps_to_ranges(laps):
     if not laps:
         return ""
-
     laps = sorted(laps)
     ranges = []
-
     start = prev = laps[0]
     for lap in laps[1:]:
         if lap == prev + 1:
@@ -32,15 +17,12 @@ def laps_to_ranges(laps):
         else:
             ranges.append(f"{start}" if start == prev else f"{start}–{prev}")
             start = prev = lap
-
     ranges.append(f"{start}" if start == prev else f"{start}–{prev}")
     return ", ".join(ranges)
 
-
 # =========================
-# Helper: HOUR parsing with PER-CAR rollover
+# Helper: parse HOUR with rollover per car
 # =========================
-
 def parse_hour_with_date_and_rollover(df: pd.DataFrame, race_start_date: datetime.date) -> pd.Series:
     def parse_time(val):
         for fmt in ("%H:%M:%S.%f", "%H:%M:%S"):
@@ -51,240 +33,142 @@ def parse_hour_with_date_and_rollover(df: pd.DataFrame, race_start_date: datetim
         return None
 
     hour_dt = pd.Series(index=df.index, dtype="datetime64[ns]")
-
     for car_id, car_df in df.sort_values("LAP_NUMBER").groupby("CAR_ID"):
         current_date = race_start_date
         last_time = None
-
         for idx, row in car_df.iterrows():
             t = parse_time(row["HOUR"])
             if t is None:
                 hour_dt.loc[idx] = pd.NaT
                 continue
-
             if last_time and t < last_time:
-                current_date += timedelta(days=1)
-
+                current_date += timedelta(days=1)  # rollover to next day
             last_time = t
             hour_dt.loc[idx] = datetime.combine(current_date, t)
-
     return hour_dt
 
-
 # =========================
-# Leader extraction with debug
+# Leader extraction
 # =========================
-
-def get_overall_leader_by_lap(df, race_start_date, debug=False):
+def get_overall_leader_by_lap(df, race_start_date):
     df = df.copy()
-    df["ELAPSED"] = parse_elapsed_to_timedelta(df["ELAPSED"])
     df["HOUR_DT"] = parse_hour_with_date_and_rollover(df, race_start_date)
 
-    df = df.sort_values(["LAP_NUMBER", "HOUR_DT", "ELAPSED"])
+    # Sort by lap, then by HOUR_DT so earliest finishing car on that lap is first
+    df = df.sort_values(["LAP_NUMBER", "HOUR_DT"])
 
     leaders = []
     laps = df["LAP_NUMBER"].unique()
     prev_leader_car_id = None
 
-    if debug:
-        st.write(f"Total unique laps in data: {len(laps)}")
-
     for lap in laps:
         lap_df = df[df["LAP_NUMBER"] == lap]
 
+        # Filter out cars crossing finish line in pit (flag 'B')
         eligible = lap_df[lap_df["CROSSING_FINISH_LINE_IN_PIT"] != "B"]
         if eligible.empty:
-            eligible = lap_df
+            eligible = lap_df  # fallback if no eligible cars
 
-        flag = lap_df["FLAG_AT_FL"].dropna().unique()
-        flag = flag[0] if len(flag) == 1 else None
+        # Check flag at finish line for the lap
+        flag_vals = lap_df["FLAG_AT_FL"].dropna().unique()
+        flag = flag_vals[0] if len(flag_vals) == 1 else None
 
+        # If under FCY (Full Course Yellow), keep previous leader if possible
         if flag == "FCY" and prev_leader_car_id is not None:
             prev_rows = eligible[eligible["CAR_ID"] == prev_leader_car_id]
             leader = prev_rows.iloc[0] if not prev_rows.empty else eligible.iloc[0]
         else:
             leader = eligible.iloc[0]
 
-        if debug:
-            st.write(f"Lap {lap}: Leader Car ID {leader['CAR_ID']} Number {leader['NUMBER']} Flag {flag} Eligible count: {len(eligible)}")
-
         leaders.append(leader)
         prev_leader_car_id = leader["CAR_ID"]
 
     leaders_df = pd.DataFrame(leaders)
 
-    if debug:
-        unique_laps = leaders_df["LAP_NUMBER"].nunique()
-        st.write(f"Leaders dataframe laps: {unique_laps}, Expected laps: {len(laps)}")
-
-        missing_laps = set(laps) - set(leaders_df["LAP_NUMBER"])
-        if missing_laps:
-            st.write(f"Missing laps in leader data: {sorted(missing_laps)}")
-
-        duplicate_laps = leaders_df["LAP_NUMBER"][leaders_df["LAP_NUMBER"].duplicated()]
-        if not duplicate_laps.empty:
-            st.write(f"Duplicate laps in leader data: {duplicate_laps.tolist()}")
-
+    # Return only relevant columns to reduce memory
     return leaders_df[["LAP_NUMBER", "CAR_ID", "NUMBER", "DRIVER_NAME", "CLASS", "FLAG_AT_FL"]]
-
 
 def get_class_leader_by_lap(df, race_start_date):
     df = df.copy()
-    df["ELAPSED"] = parse_elapsed_to_timedelta(df["ELAPSED"])
     df["HOUR_DT"] = parse_hour_with_date_and_rollover(df, race_start_date)
-
+    sorted_df = df.sort_values(["LAP_NUMBER", "CLASS", "HOUR_DT"])
     return (
-        df.sort_values(["LAP_NUMBER", "CLASS", "HOUR_DT", "ELAPSED"])
-          .groupby(["LAP_NUMBER", "CLASS"], as_index=False)
-          .first()
-          [["LAP_NUMBER", "CLASS", "CAR_ID", "NUMBER", "DRIVER_NAME"]]
+        sorted_df.groupby(["LAP_NUMBER", "CLASS"], as_index=False)
+        .first()[["LAP_NUMBER", "CLASS", "CAR_ID", "NUMBER", "DRIVER_NAME"]]
     )
-
 
 # =========================
 # Metrics
 # =========================
-
 def compute_lead_changes(overall_leader_df):
     df = overall_leader_df.sort_values("LAP_NUMBER")
     return max((df["CAR_ID"] != df["CAR_ID"].shift()).sum() - 1, 0)
 
-
 def compute_lead_changes_by_class(class_leader_df):
-    """
-    Compute lead changes per class.
-    """
     results = {}
-
     for cls, cls_df in class_leader_df.groupby("CLASS"):
         cls_df = cls_df.sort_values("LAP_NUMBER")
         changes = (cls_df["CAR_ID"] != cls_df["CAR_ID"].shift()).sum() - 1
         results[cls] = max(changes, 0)
-
     return results
-
 
 def compute_flag_lap_counts(overall_leader_df):
     return overall_leader_df["FLAG_AT_FL"].fillna("GREEN").value_counts().to_dict()
-
 
 def compute_longest_lead_stint(overall_leader_df):
     df = overall_leader_df.copy()
     df["change"] = df["CAR_ID"] != df["CAR_ID"].shift()
     df["stint_id"] = df["change"].cumsum()
-
     stints = (
         df.groupby(["stint_id", "CAR_ID", "NUMBER"])
-          .size()
-          .reset_index(name="laps_led")
-          .sort_values("laps_led", ascending=False)
+        .size()
+        .reset_index(name="laps_led")
+        .sort_values("laps_led", ascending=False)
     )
-
     top = stints.iloc[0]
     return top["NUMBER"], int(top["laps_led"])
 
-
 def compute_car_lead_stats_by_class(class_leader_df):
     total_laps = class_leader_df.groupby("CLASS")["LAP_NUMBER"].nunique().to_dict()
-
     grouped = class_leader_df.groupby(["CLASS", "CAR_ID", "NUMBER"])
     car_stats = grouped.size().reset_index(name="laps_led")
-
     car_stats["laps_range"] = grouped["LAP_NUMBER"].apply(
         lambda x: laps_to_ranges(x.tolist())
     ).values
-
     car_stats["pct_led"] = car_stats.apply(
-        lambda r: round(r["laps_led"] / total_laps.get(r["CLASS"], 1) * 100, 1),
-        axis=1
+        lambda r: round(r["laps_led"] / total_laps.get(r["CLASS"], 1) * 100, 1), axis=1
     )
-
     return car_stats.sort_values(["CLASS", "laps_led"], ascending=[True, False])
-
 
 def compute_driver_lead_stats_by_class(class_leader_df):
     total_laps = class_leader_df.groupby("CLASS")["LAP_NUMBER"].nunique().to_dict()
-
-    grouped = class_leader_df.groupby(
-        ["CLASS", "CAR_ID", "NUMBER", "DRIVER_NAME"]
-    )
-
+    grouped = class_leader_df.groupby(["CLASS", "CAR_ID", "NUMBER", "DRIVER_NAME"])
     driver_stats = grouped.size().reset_index(name="laps_led")
-
     driver_stats["laps_range"] = grouped["LAP_NUMBER"].apply(
         lambda x: laps_to_ranges(x.tolist())
     ).values
-
     driver_stats["pct_led"] = driver_stats.apply(
-        lambda r: round(r["laps_led"] / total_laps.get(r["CLASS"], 1) * 100, 1),
-        axis=1
+        lambda r: round(r["laps_led"] / total_laps.get(r["CLASS"], 1) * 100, 1), axis=1
     )
-
     return driver_stats.sort_values(
-        ["CLASS", "laps_led", "NUMBER"],
-        ascending=[True, False, True]
+        ["CLASS", "laps_led", "NUMBER"], ascending=[True, False, True]
     )
-
-
-# =========================
-# Caching and preprocessing helpers
-# =========================
-
-@st.cache_data(show_spinner="Preprocessing race data for stats…")
-def preprocess_for_stats(df, race_start_date):
-    pre_df = preprocess_race(df)
-
-    pre_df["ELAPSED"] = parse_elapsed_to_timedelta(pre_df["ELAPSED"])
-    pre_df["HOUR_DT"] = parse_hour_with_date_and_rollover(pre_df, race_start_date)
-
-    pre_df = pre_df.dropna(subset=["ELAPSED", "HOUR_DT"])
-
-    return pre_df
-
-
-@st.cache_data(show_spinner="Computing overall leader by lap…")
-def cached_overall_leader(pre_df, race_start_date, debug=False):
-    return get_overall_leader_by_lap(pre_df, race_start_date, debug=debug)
-
-
-@st.cache_data(show_spinner="Computing class leader by lap…")
-def cached_class_leader(pre_df, race_start_date):
-    return get_class_leader_by_lap(pre_df, race_start_date)
-
-
-@st.cache_data(show_spinner="Computing lead stats…")
-def cached_lead_stats(overall_leader_df, class_leader_df):
-    return {
-        "lead_changes": compute_lead_changes(overall_leader_df),
-        "lead_changes_by_class": compute_lead_changes_by_class(class_leader_df),
-        "flag_lap_counts": compute_flag_lap_counts(overall_leader_df),
-        "longest_lead_stint": compute_longest_lead_stint(overall_leader_df),
-        "car_stats": compute_car_lead_stats_by_class(class_leader_df),
-        "driver_stats": compute_driver_lead_stats_by_class(class_leader_df),
-    }
-
 
 # =========================
 # Streamlit renderer
 # =========================
-
-def show_race_stats(df, race_start_date, debug=False):
+def show_race_stats(df, race_start_date):
     st.subheader("Race statistics")
+    df = df.copy()
 
-    pre_df = preprocess_for_stats(df, race_start_date)
-
-    overall_leader_df = cached_overall_leader(pre_df, race_start_date, debug=debug)
-    class_leader_df = cached_class_leader(pre_df, race_start_date)
-
-    stats = cached_lead_stats(overall_leader_df, class_leader_df)
+    overall_leader_df = get_overall_leader_by_lap(df, race_start_date)
+    class_leader_df = get_class_leader_by_lap(df, race_start_date)
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
-        st.metric("Overall lead changes", stats["lead_changes"])
-
+        st.metric("Overall lead changes", compute_lead_changes(overall_leader_df))
         st.markdown("**Lead changes by class**")
-        for cls, changes in stats["lead_changes_by_class"].items():
+        for cls, changes in compute_lead_changes_by_class(class_leader_df).items():
             st.write(f"- **{cls}**: {changes}")
 
     with col2:
@@ -294,50 +178,54 @@ def show_race_stats(df, race_start_date, debug=False):
         st.metric("Total race laps", overall_leader_df["LAP_NUMBER"].nunique())
 
     st.markdown("**Laps by flag condition**")
-    for flag, count in stats["flag_lap_counts"].items():
+    for flag, count in compute_flag_lap_counts(overall_leader_df).items():
         st.write(f"- **{flag}**: {count} laps")
 
-    car, laps = stats["longest_lead_stint"]
+    car, laps = compute_longest_lead_stint(overall_leader_df)
     st.markdown(f"**Longest uninterrupted overall lead:** Car **{car}** – **{laps} laps**")
 
     st.markdown("## Laps led by class")
-
     classes = sorted(class_leader_df["CLASS"].dropna().unique())
     tabs = st.tabs(classes)
+
+    car_stats = compute_car_lead_stats_by_class(class_leader_df)
+    driver_stats = compute_driver_lead_stats_by_class(class_leader_df)
 
     for tab, cls in zip(tabs, classes):
         with tab:
             st.markdown("### Cars")
-            cs = stats["car_stats"][stats["car_stats"]["CLASS"] == cls]
-
+            cs = car_stats[car_stats["CLASS"] == cls]
             st.dataframe(
-                cs.rename(columns={
-                    "NUMBER": "Car",
-                    "CAR_ID": "Car ID",
-                    "laps_led": "Laps led",
-                    "laps_range": "Laps led (ranges)",
-                    "pct_led": "% of class race led"
-                })[
+                cs.rename(
+                    columns={
+                        "NUMBER": "Car",
+                        "CAR_ID": "Car ID",
+                        "laps_led": "Laps led",
+                        "laps_range": "Laps led (ranges)",
+                        "pct_led": "% of class race led",
+                    }
+                )[
                     ["Car", "Car ID", "Laps led", "Laps led (ranges)", "% of class race led"]
                 ],
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
             )
 
             st.markdown("### Drivers")
-            ds = stats["driver_stats"][stats["driver_stats"]["CLASS"] == cls]
-
+            ds = driver_stats[driver_stats["CLASS"] == cls]
             st.dataframe(
-                ds.rename(columns={
-                    "NUMBER": "Car",
-                    "CAR_ID": "Car ID",
-                    "DRIVER_NAME": "Driver",
-                    "laps_led": "Laps led",
-                    "laps_range": "Laps led (ranges)",
-                    "pct_led": "% of class race led"
-                })[
+                ds.rename(
+                    columns={
+                        "NUMBER": "Car",
+                        "CAR_ID": "Car ID",
+                        "DRIVER_NAME": "Driver",
+                        "laps_led": "Laps led",
+                        "laps_range": "Laps led (ranges)",
+                        "pct_led": "% of class race led",
+                    }
+                )[
                     ["Car", "Car ID", "Driver", "Laps led", "Laps led (ranges)", "% of class race led"]
                 ],
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
             )
