@@ -213,7 +213,8 @@ def compute_driver_lead_stats_by_class(class_leader_df):
 
 @st.cache_data(show_spinner="Preprocessing race data for stats…")
 def preprocess_for_stats(df, race_start_date):
-    pre_df = preprocess_race(df)
+    # Pass drop_invalid_lap_time=False to keep all laps
+    pre_df = preprocess_race(df, drop_invalid_lap_time=False)
 
     pre_df["ELAPSED"] = parse_elapsed_to_timedelta(pre_df["ELAPSED"])
     pre_df["HOUR_DT"] = parse_hour_with_date_and_rollover(pre_df, race_start_date)
