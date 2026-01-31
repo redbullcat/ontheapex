@@ -244,7 +244,7 @@ if page == "Overview":
     overview_tab, gap_tab, pace_tab, pits_tab = st.tabs(["Overview", 'Gap evolution', 'Race pace', "Pit stops"])
 
     with overview_tab:
-        show_race_stats(df, race_start_date, debug=True)
+        show_race_stats(df, race_start_date)
         show_results_table(df, team_colors)
         show_lap_position_chart(df, team_colors)
 
