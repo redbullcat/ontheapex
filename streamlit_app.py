@@ -6,7 +6,7 @@ from datetime import datetime
 
 from race_preprocessing import preprocess_race
 from pace_chart import show_pace_chart
-from lap_position_chart import show_lap_position_chart
+# from lap_position_chart import show_lap_position_chart
 from driver_pace_chart import show_driver_pace_chart
 from driver_pace_comparison_chart import show_driver_pace_comparison
 from team_driver_pace_comparison import show_team_driver_pace_comparison
@@ -246,7 +246,7 @@ if page == "Overview":
     with overview_tab:
         show_race_stats(df, race_start_date)
         show_results_table(df, team_colors)
-        show_lap_position_chart(df, team_colors)
+       # show_lap_position_chart(df, team_colors)
 
     with pace_tab:
         show_pace_chart(df_pre, team_colors)
