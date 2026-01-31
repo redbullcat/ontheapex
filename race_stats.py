@@ -72,10 +72,10 @@ def parse_hour_with_date_and_rollover(df: pd.DataFrame, race_start_date: datetim
 
 
 # =========================
-# Leader extraction
+# Leader extraction with debug
 # =========================
 
-def get_overall_leader_by_lap(df, race_start_date):
+def get_overall_leader_by_lap(df, race_start_date, debug=False):
     df = df.copy()
     df["ELAPSED"] = parse_elapsed_to_timedelta(df["ELAPSED"])
     df["HOUR_DT"] = parse_hour_with_date_and_rollover(df, race_start_date)
@@ -85,6 +85,9 @@ def get_overall_leader_by_lap(df, race_start_date):
     leaders = []
     laps = df["LAP_NUMBER"].unique()
     prev_leader_car_id = None
+
+    if debug:
+        st.write(f"Total unique laps in data: {len(laps)}")
 
     for lap in laps:
         lap_df = df[df["LAP_NUMBER"] == lap]
@@ -102,10 +105,26 @@ def get_overall_leader_by_lap(df, race_start_date):
         else:
             leader = eligible.iloc[0]
 
+        if debug:
+            st.write(f"Lap {lap}: Leader Car ID {leader['CAR_ID']} Number {leader['NUMBER']} Flag {flag} Eligible count: {len(eligible)}")
+
         leaders.append(leader)
         prev_leader_car_id = leader["CAR_ID"]
 
     leaders_df = pd.DataFrame(leaders)
+
+    if debug:
+        unique_laps = leaders_df["LAP_NUMBER"].nunique()
+        st.write(f"Leaders dataframe laps: {unique_laps}, Expected laps: {len(laps)}")
+
+        missing_laps = set(laps) - set(leaders_df["LAP_NUMBER"])
+        if missing_laps:
+            st.write(f"Missing laps in leader data: {sorted(missing_laps)}")
+
+        duplicate_laps = leaders_df["LAP_NUMBER"][leaders_df["LAP_NUMBER"].duplicated()]
+        if not duplicate_laps.empty:
+            st.write(f"Duplicate laps in leader data: {duplicate_laps.tolist()}")
+
     return leaders_df[["LAP_NUMBER", "CAR_ID", "NUMBER", "DRIVER_NAME", "CLASS", "FLAG_AT_FL"]]
 
 
@@ -213,8 +232,7 @@ def compute_driver_lead_stats_by_class(class_leader_df):
 
 @st.cache_data(show_spinner="Preprocessing race data for stats…")
 def preprocess_for_stats(df, race_start_date):
-    # Pass drop_invalid_lap_time=False to keep all laps
-    pre_df = preprocess_race(df, drop_invalid_lap_time=False)
+    pre_df = preprocess_race(df)
 
     pre_df["ELAPSED"] = parse_elapsed_to_timedelta(pre_df["ELAPSED"])
     pre_df["HOUR_DT"] = parse_hour_with_date_and_rollover(pre_df, race_start_date)
@@ -225,8 +243,8 @@ def preprocess_for_stats(df, race_start_date):
 
 
 @st.cache_data(show_spinner="Computing overall leader by lap…")
-def cached_overall_leader(pre_df, race_start_date):
-    return get_overall_leader_by_lap(pre_df, race_start_date)
+def cached_overall_leader(pre_df, race_start_date, debug=False):
+    return get_overall_leader_by_lap(pre_df, race_start_date, debug=debug)
 
 
 @st.cache_data(show_spinner="Computing class leader by lap…")
@@ -250,12 +268,12 @@ def cached_lead_stats(overall_leader_df, class_leader_df):
 # Streamlit renderer
 # =========================
 
-def show_race_stats(df, race_start_date):
+def show_race_stats(df, race_start_date, debug=False):
     st.subheader("Race statistics")
 
     pre_df = preprocess_for_stats(df, race_start_date)
 
-    overall_leader_df = cached_overall_leader(pre_df, race_start_date)
+    overall_leader_df = cached_overall_leader(pre_df, race_start_date, debug=debug)
     class_leader_df = cached_class_leader(pre_df, race_start_date)
 
     stats = cached_lead_stats(overall_leader_df, class_leader_df)
