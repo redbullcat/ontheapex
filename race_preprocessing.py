@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 
 @st.cache_data(show_spinner="Preprocessing race data…")
-def preprocess_race(df):
+def preprocess_race(df, drop_invalid_lap_time=True):
     """
     Minimal, shared preprocessing:
     - Convert LAP_TIME to seconds
-    - Drop invalid laps
+    - Optionally drop invalid laps
     - Return a clean dataframe for reuse
     """
 
@@ -20,7 +20,9 @@ def preprocess_race(df):
             return None
 
     df["LAP_TIME_SECONDS"] = df["LAP_TIME"].apply(lap_to_seconds)
-    df = df.dropna(subset=["LAP_TIME_SECONDS"])
+
+    if drop_invalid_lap_time:
+        df = df.dropna(subset=["LAP_TIME_SECONDS"])
 
     return df
 
